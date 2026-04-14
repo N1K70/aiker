@@ -2,9 +2,33 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 
 from openai import OpenAI
+
+
+def _extract_json(content: str) -> str:
+    """
+    Strip Qwen3 / other CoT model thinking blocks and extract the JSON object.
+
+    Some reasoning models (Qwen3, DeepSeek-R1) wrap their chain-of-thought in
+    <think>...</think> tags before the actual response.  When response_format is
+    json_object, the thinking content may still appear in the message and contain
+    large integers (reasoning budget tokens) that exceed Python 3.11+ int limits.
+
+    Strategy:
+      1. Remove <think>...</think> blocks (including partial/unclosed ones).
+      2. Scan for the first top-level JSON object { ... }.
+      3. Fall back to the raw content so the caller gets a useful error message.
+    """
+    # Strip thinking blocks (may be unclosed if the model was interrupted)
+    cleaned = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+    cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.DOTALL).strip()
+
+    # Extract first JSON object — handles preamble text before the brace
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    return match.group(0) if match else cleaned
 
 
 @dataclass(frozen=True)
@@ -41,7 +65,9 @@ class OpenRouterClient:
                 {"role": "user", "content": dynamic_context},
             ],
         )
-        return (response.choices[0].message.content or "").strip()
+        raw = response.choices[0].message.content or ""
+        # Strip thinking blocks — narrative output should be just the entry text
+        return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
     def json_completion(self, static_system: str, dynamic_context: str) -> dict:
         """
@@ -64,7 +90,10 @@ class OpenRouterClient:
             ],
         )
         content = response.choices[0].message.content or "{}"
+        extracted = _extract_json(content)
         try:
-            return json.loads(content)
+            # parse_int=str avoids Python 3.11+ integer-string conversion limits
+            # triggered by large CoT budget tokens in Qwen3/DeepSeek-R1 responses.
+            return json.loads(extracted, parse_int=str)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Model response was not valid JSON: {content}") from exc
+            raise ValueError(f"Model response was not valid JSON: {extracted!r}") from exc
