@@ -15,6 +15,7 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn
 from rich.table import Table
 from sqlmodel import Session as DBSession
 
+from aiker.agent.booklog import write_pirate_booklog
 from aiker.agent.prompts import normalize_profile
 from aiker.agent.react_loop import plan_next_step
 from aiker.config import ensure_directories, get_app_paths
@@ -32,7 +33,7 @@ from aiker.memory.context_builder import build_model_context
 from aiker.memory.service import record_tool_outcome
 from aiker.projects.service import CreateProjectInput, create_project
 from aiker.sessions.service import start_session
-from aiker.tools.executor import execute_tool
+from aiker.tools.executor import ToolResult, execute_tool
 from aiker.tools.registry import default_tools, get_tool_spec, is_high_risk_tool
 
 app = typer.Typer(help="Aiker CLI: ReAct pentest agent framework.")
@@ -223,6 +224,39 @@ def _log_step(project_dir: Path, step: int, tool: str, reasoning: str, status: s
     else:
         with log_path.open("a", encoding="utf-8") as fh:
             fh.write(block)
+
+
+_BOOKLOG_INTERVAL = 5  # Write a captain's log entry every N steps
+
+
+def _invoke_booklog(
+    client: OpenRouterClient,
+    project: "Project",  # type: ignore[name-defined]
+    context_payload: dict,
+    project_dir: Path,
+    step_index: int,
+) -> None:
+    """Call write_pirate_booklog and display the result in a themed panel."""
+    try:
+        entry = write_pirate_booklog(
+            client=client,
+            project=project,
+            context_payload=context_payload,
+            project_dir=project_dir,
+            step_index=step_index,
+        )
+        log_path = project_dir / "captain_log.md"
+        console.print(
+            Panel(
+                entry.strip(),
+                title="[bold yellow]Captain's Log[/bold yellow]",
+                subtitle=f"[dim]{log_path}[/dim]",
+                border_style="yellow",
+                padding=(0, 1),
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — booklog is best-effort, never crash the loop
+        console.print(f"[yellow dim][booklog] Quartermaster's quill ran dry: {exc}[/yellow dim]")
 
 
 def _render_preview(raw_output: str, max_chars: int = 2200, max_line_length: int = 140, max_lines: int = 36) -> str:
@@ -447,15 +481,34 @@ def workflow(
                 console.print()
 
             # --- Execute ---
+            # write_pirate_booklog is handled here (needs LLM client — bypasses executor)
             t_start = time.monotonic()
-            with console.status(f"[cyan]Running {plan.next_tool}...[/cyan]"):
-                result = execute_tool(
-                    tool_name=plan.next_tool,
-                    tool_input=plan.tool_input,
-                    project=project,
-                    project_dir=project_dir,
-                    context_payload=context_payload,
+            if plan.next_tool == "write_pirate_booklog":
+                with console.status("[bold yellow]Quartermaster scribbling...[/bold yellow]"):
+                    _invoke_booklog(
+                        client=client,
+                        project=project,
+                        context_payload=context_payload,
+                        project_dir=project_dir,
+                        step_index=step_index,
+                    )
+                result = ToolResult(
+                    status="success",
+                    summary="Captain's Log updated.",
+                    raw_output="",
+                    artifacts=[str(project_dir / "captain_log.md")],
+                    facts_extracted=[],
+                    confidence=1.0,
                 )
+            else:
+                with console.status(f"[cyan]Running {plan.next_tool}...[/cyan]"):
+                    result = execute_tool(
+                        tool_name=plan.next_tool,
+                        tool_input=plan.tool_input,
+                        project=project,
+                        project_dir=project_dir,
+                        context_payload=context_payload,
+                    )
             elapsed = time.monotonic() - t_start
 
             execution_id = record_tool_outcome(
@@ -477,6 +530,23 @@ def workflow(
                 summary=result.summary,
                 raw_output=result.raw_output,
             )
+
+            # Automatic booklog — fires every N steps or on the final stop.
+            # Does NOT fire when the agent already called write_pirate_booklog this step.
+            auto_booklog = (
+                plan.next_tool != "write_pirate_booklog"
+                and (step_index % _BOOKLOG_INTERVAL == 0 or plan.decision == "stop")
+            )
+            if auto_booklog:
+                refreshed_context = build_model_context(db=db, project_id=project.id, objective=goal)
+                with console.status("[bold yellow]Quartermaster scribbling...[/bold yellow]"):
+                    _invoke_booklog(
+                        client=client,
+                        project=project,
+                        context_payload=refreshed_context,
+                        project_dir=project_dir,
+                        step_index=step_index,
+                    )
 
             timeline.append(
                 {
