@@ -26,6 +26,23 @@ class OpenRouterClient:
             raise ValueError("OPENROUTER_API_KEY is not set.")
         return cls(api_key=api_key)
 
+    def text_completion(self, static_system: str, dynamic_context: str, temperature: float = 0.65) -> str:
+        """
+        Free-form text completion — no JSON response_format enforced.
+        Used for narrative/creative outputs like the pirate booklog.
+        Higher temperature than json_completion to allow expressive language.
+        """
+        response = self._client.chat.completions.create(
+            model=self._config.model,
+            temperature=temperature,
+            top_p=0.9,
+            messages=[
+                {"role": "system", "content": static_system},
+                {"role": "user", "content": dynamic_context},
+            ],
+        )
+        return (response.choices[0].message.content or "").strip()
+
     def json_completion(self, static_system: str, dynamic_context: str) -> dict:
         """
         Two-part prompt architecture:

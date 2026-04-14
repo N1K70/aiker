@@ -49,6 +49,21 @@ def default_tools() -> list[ToolSpec]:
             when_to_use="When the engagement is complete and no further tool calls can produce new information.",
             reveals="A consolidated view of everything found so far.",
         ),
+        ToolSpec(
+            name="write_pirate_booklog",
+            description="Write a pirate-themed narrative entry to captain_log.md summarising recent actions and findings.",
+            risk_class="low",
+            when_to_use=(
+                "Use after a cluster of significant discoveries — confirmed open ports, valid credentials, "
+                "exploitable vulnerabilities, or successful shell access. Also use when transitioning between "
+                "reconnaissance phases (e.g., finishing port scan and starting web enumeration). "
+                "Do NOT call every step — aim for roughly every 5 steps or at major milestones."
+            ),
+            reveals=(
+                "Appends a vivid, technically-accurate pirate narrative entry to captain_log.md. "
+                "No new recon data is produced — this is purely a documentation tool."
+            ),
+        ),
 
         # ── DNS / Reachability ────────────────────────────────────────────────
         ToolSpec(
