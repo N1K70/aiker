@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
@@ -30,7 +32,7 @@ from aiker.db.repositories import (
 from aiker.kali import build_environment_report
 from aiker.llm.openrouter_client import OpenRouterClient
 from aiker.memory.context_builder import build_model_context
-from aiker.memory.service import record_tool_outcome
+from aiker.memory.service import compress_short_term_memory, record_tool_outcome
 from aiker.projects.service import CreateProjectInput, create_project
 from aiker.sessions.service import start_session
 from aiker.tools.executor import ToolResult, execute_tool
@@ -226,7 +228,14 @@ def _log_step(project_dir: Path, step: int, tool: str, reasoning: str, status: s
             fh.write(block)
 
 
-_BOOKLOG_INTERVAL = 5  # Write a captain's log entry every N steps
+_BOOKLOG_INTERVAL = 5   # Write a captain's log entry every N steps
+_LOOP_WINDOW = 3        # How many recent actions to check for repetition
+
+
+def _action_fingerprint(tool_name: str, tool_input: dict) -> str:
+    """Stable hash of tool_name + sorted tool_input — used for loop detection."""
+    key = tool_name + json.dumps(tool_input, sort_keys=True)
+    return hashlib.md5(key.encode()).hexdigest()  # noqa: S324 — not security-critical
 
 
 def _invoke_booklog(
@@ -449,7 +458,17 @@ def workflow(
 
         console.print(f"[dim]Log:[/dim] {log_path}\n")
 
+        action_fingerprints: deque[str] = deque(maxlen=_LOOP_WINDOW)
+
         for step_index in range(1, max_steps + 1):
+            # --- Compress short-term memory before planning (prevents amnesia) ---
+            with console.status(f"[bold cyan][{step_index}/{max_steps}] Planning next move...[/bold cyan]"):
+                compressed = compress_short_term_memory(
+                    db=db, client=client, project_id=project.id, session_id=session_obj.id
+                )
+                if compressed:
+                    console.print("[dim][memory] Short-term compressed → long-term.[/dim]")
+
             # --- Plan ---
             context_payload = build_model_context(db=db, project_id=project.id, objective=goal)
             with console.status(f"[bold cyan][{step_index}/{max_steps}] Planning next move...[/bold cyan]"):
@@ -463,6 +482,31 @@ def workflow(
                     step_index=step_index,
                     max_steps=max_steps,
                 )
+
+            # --- Circuit breaker: detect and break loops before executing ---
+            fp = _action_fingerprint(plan.next_tool, plan.tool_input)
+            if fp in action_fingerprints:
+                loop_msg = (
+                    f"SYSTEM ALERT: You are repeating the exact same action "
+                    f"(tool='{plan.next_tool}', input={json.dumps(plan.tool_input, sort_keys=True)}) "
+                    f"that already ran in the last {_LOOP_WINDOW} steps. "
+                    f"This action produced no new information. "
+                    f"You MUST pivot to a completely different tool or a different strategy immediately. "
+                    f"Do NOT call this tool again with the same parameters."
+                )
+                console.print(f"[bold red][loop-breaker][/bold red] [yellow]{plan.next_tool} repeated — forcing re-plan.[/yellow]")
+                with console.status("[bold cyan]Re-planning...[/bold cyan]"):
+                    plan = plan_next_step(
+                        client=client,
+                        project=project,
+                        objective=goal,
+                        context_payload=context_payload,
+                        profile=resolved_profile,
+                        allow_high_risk=allow_high_risk,
+                        step_index=step_index,
+                        max_steps=max_steps,
+                        loop_warning=loop_msg,
+                    )
 
             if is_high_risk_tool(plan.next_tool) and not allow_high_risk:
                 console.print(
@@ -519,6 +563,9 @@ def workflow(
                 tool_input=plan.tool_input,
                 result=result,
             )
+
+            # Update circuit-breaker history after execution
+            action_fingerprints.append(_action_fingerprint(plan.next_tool, plan.tool_input))
 
             # Write step to engagement log automatically
             _log_step(

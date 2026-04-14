@@ -34,6 +34,7 @@ def plan_next_step(
     allow_high_risk: bool = False,
     step_index: int = 1,
     max_steps: int = 20,
+    loop_warning: str = "",
 ) -> ReactPlanResult:
     available_tools = filter_tools_by_risk(allow_high_risk=allow_high_risk)
     prompt = build_planner_user_prompt(
@@ -45,6 +46,7 @@ def plan_next_step(
         allow_high_risk=allow_high_risk,
         step_index=step_index,
         max_steps=max_steps,
+        loop_warning=loop_warning,
     )
     result = client.json_completion(static_system=PLANNER_SYSTEM_PROMPT, dynamic_context=prompt)
 

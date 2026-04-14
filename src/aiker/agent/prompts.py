@@ -177,12 +177,19 @@ def build_planner_user_prompt(
     allow_high_risk: bool,
     step_index: int = 1,
     max_steps: int = 20,
+    loop_warning: str = "",
 ) -> str:
     local_env = _detect_local_env()
     context_text = render_context_for_prompt(context_payload)
     tools_text = _render_tool_catalog(available_tools)
     normalized_profile = normalize_profile(profile=profile, target=project.target)
     profile_guidance = _get_profile_guidance(normalized_profile)
+
+    warning_block = (
+        f"\n<warning priority=\"CRITICAL\">\n"
+        f"{loop_warning.strip()}\n"
+        f"</warning>\n"
+    ) if loop_warning.strip() else ""
 
     return (
         f"<env>\n"
@@ -204,6 +211,7 @@ def build_planner_user_prompt(
         f"<memory>\n"
         f"{context_text}\n"
         f"</memory>\n"
+        f"{warning_block}"
         f"\n"
         f"<tools>\n"
         f"{tools_text}\n"

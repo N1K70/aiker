@@ -171,3 +171,27 @@ def list_memory_items(db: DBSession, project_id: int, memory_tier: str | None = 
         stmt = stmt.where(MemoryItem.memory_tier == memory_tier)
     stmt = stmt.order_by(MemoryItem.created_at.desc()).limit(limit)
     return list(db.exec(stmt).all())
+
+
+def count_active_memory_items(db: DBSession, project_id: int, memory_tier: str) -> int:
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(MemoryItem.id)
+        .where(MemoryItem.project_id == project_id)
+        .where(MemoryItem.memory_tier == memory_tier)
+        .where((MemoryItem.expires_at.is_(None)) | (MemoryItem.expires_at > now))
+    )
+    return len(list(db.exec(stmt).all()))
+
+
+def expire_memory_items(db: DBSession, item_ids: list[int]) -> None:
+    """Immediately expire a list of MemoryItems by setting expires_at to now."""
+    if not item_ids:
+        return
+    now = datetime.now(timezone.utc)
+    for item_id in item_ids:
+        item = db.get(MemoryItem, item_id)
+        if item is not None:
+            item.expires_at = now
+            db.add(item)
+    db.commit()
