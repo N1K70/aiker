@@ -83,7 +83,10 @@ class OpenRouterClient:
             model=self._config.model,
             temperature=self._config.temperature,
             top_p=self._config.top_p,
-            response_format={"type": "json_object"},
+            # Do NOT set response_format=json_object — Qwen3 / DeepSeek-R1 in
+            # thinking mode return a JSON-encoded string instead of an object
+            # when that flag is used.  We enforce JSON via the system prompt and
+            # extract it manually via _extract_json().
             messages=[
                 {"role": "system", "content": static_system},
                 {"role": "user", "content": dynamic_context},
@@ -94,6 +97,9 @@ class OpenRouterClient:
         try:
             # parse_int=str avoids Python 3.11+ integer-string conversion limits
             # triggered by large CoT budget tokens in Qwen3/DeepSeek-R1 responses.
-            return json.loads(extracted, parse_int=str)
+            result = json.loads(extracted, parse_int=str)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Model response was not valid JSON: {extracted!r}") from exc
+        if not isinstance(result, dict):
+            raise ValueError(f"Model returned {type(result).__name__}, expected JSON object: {extracted!r}")
+        return result
