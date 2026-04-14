@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiker"
+version = "0.1.0"
+description = "Aiker: ReAct pentest agent with tools, memory, and project context."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.12.3",
+  "rich>=13.7.1",
+  "pydantic>=2.7.4",
+  "sqlmodel>=0.0.22",
+  "openai>=1.44.0",
+  "python-dotenv>=1.0.1"
+]
+
+[project.scripts]
+aiker = "aiker.cli:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
