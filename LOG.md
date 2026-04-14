@@ -8,7 +8,9 @@ Runtime target: Linux-only, with Kali Linux as the primary operating environment
 
 ## In Progress
 
-- [ ] Improve output readability with richer progress/timeline view in CLI and Ink.
+- [ ] ReAct reflection split: replace `reasoning_summary` with `observation_reflection` + `next_plan`
+- [ ] Context compression: consolidator that collapses short_term memory into long_term before overflow
+- [ ] Modular profiles: move PROFILE_GUIDANCE from Python dict to `agent/profiles/*.md` files
 
 ## Backlog
 
@@ -18,6 +20,33 @@ Runtime target: Linux-only, with Kali Linux as the primary operating environment
 - [ ] Add integration tests for CLI flows.
 - [ ] Add DB migrations with Alembic instead of table auto-creation only.
 - [ ] Add robust project path rendering in CLI without visual wrapping issues.
+- [ ] Semantic context summarization via LLM sub-call (upgrade from structural compression).
+- [ ] Live VPN/interface state injection into <env> block (ip a | grep tun, whoami, pwd).
+
+## Architecture Review Notes (2025-01-14)
+
+Analysis of gaps vs "Agent 2026" architecture:
+
+**Already resolved:**
+- Cache boundary (static/dynamic prompt split) — implemented via static_system / dynamic_context in OpenRouterClient
+- Environment awareness `<env>` — distro, kernel, shell, arch injected dynamically
+- 0HIL / BypassPermissions — declared in identity block, no mid-loop permission requests
+
+**Gaps being addressed now:**
+- Reflection split: `reasoning_summary` is a single blob. Splitting into `observation_reflection`
+  (what did the last tool output mean?) and `next_plan` (therefore what do I do now?) forces the
+  model to reason in two explicit steps before selecting a tool — improves self-correction significantly.
+- Context compression: truncating at limit=10 is not compressing. Old successful observations get
+  evicted by recent failures. Consolidator merges oldest short_term items into a single long_term
+  entry before the window fills, preserving signal while keeping the context window clean.
+- Modular profiles: PROFILE_GUIDANCE in a Python dict means changing tactics requires a code deploy.
+  Moving to .md files makes the agent's playbook editable without touching core code.
+
+**Future gaps (backlog):**
+- Semantic summarization: current consolidation is structural (text join). True compression needs
+  an LLM sub-call to distill N observations into 1 high-signal summary.
+- Live env state: VPN interface, current user, working directory injected fresh each turn — not just
+  at startup. Prevents the agent from acting on stale network assumptions mid-engagement.
 
 ## Done
 
@@ -92,7 +121,32 @@ Runtime target: Linux-only, with Kali Linux as the primary operating environment
 - [x] Added safer folder naming for URL targets (Windows-safe display names).
 - [x] Added scope normalization for URL targets (host-based project scope).
 - [x] Added retry protection for project sequence allocation under concurrent runs.
+- [x] Implemented claude-code-style prompt architecture (static/dynamic split + XML tags + 0HIL):
+  - `PLANNER_SYSTEM_PROMPT` (static): identity, ReAct loop, tool guidelines, stopping rules — system message, cacheable
+  - `build_planner_user_prompt()` (dynamic): `<env>`, `<task>`, `<memory>`, `<tools>` — user message, changes every turn
+  - `<env>` auto-detects distro, kernel, shell, arch and injects real values — eliminates environment hallucinations
+  - agent declared 0HIL / BypassPermissions — no mid-loop permission requests
+  - `OpenRouterClient.json_completion()` renamed to `static_system` / `dynamic_context` params to enforce the split
+  - XML tags structure model attention: `<tools>` with `<use_when>` and `<reveals>` per tool
 - [x] Improved output rendering with preview clipping and line truncation.
+- [x] Added per-engagement writing — agent now keeps its own records:
+  - `engagement_log.md` written automatically per step: tool, reasoning, result, output preview
+  - `findings.md` written by the agent via `append_finding` tool when it confirms a significant finding
+  - `append_finding` tool added to registry with title/severity/evidence/detail fields
+  - agent prompted to call `append_finding` before moving on whenever a finding is confirmed
+  - both files live in the project folder alongside `engagement.yaml`
+- [x] Enriched tool registry and agent decision-making:
+  - `ToolSpec` extended with `when_to_use` and `reveals` fields for all 32 tools
+  - agent now sees full decision context per tool: when to pick it and what it produces
+  - system prompt rewritten around evidence-to-tool chaining: agent reads "Use when" against current evidence
+  - explicit chaining examples in prompt: port 445 → enum4linux → smbclient → smbmap; port 80 → http_probe → whatweb → nuclei
+  - agent decision skill is now intrinsic, not enforced by code overrides
+- [x] Converted `workflow` to a full ReAct loop — no static tool sequence:
+  - each step: LLM plans from evidence → shows reasoning → executes tool → result feeds next decision
+  - system prompt rewritten with hunter personality: curiosity, depth-first chasing, never satisfied with surface recon
+  - profile guidance chains moves: port → service → version → CVE → exploit path
+  - timeline summary shows reasoning per step
+  - `--max-steps` (default 20) replaces `--max-tools`; `--allow-high-risk` wired in
 - [x] Verified flows:
   - `python -m aiker --help`
   - `python -m aiker project create ...`
