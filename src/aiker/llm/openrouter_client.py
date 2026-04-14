@@ -33,14 +33,14 @@ def _extract_json(content: str) -> str:
 
 @dataclass(frozen=True)
 class LLMConfig:
-    model: str = "qwen/qwen3-235b-a22b"
+    model: str = "qwen/qwen3.6-plus"
     temperature: float = 0.01
     top_p: float = 0.2
 
 
 class OpenRouterClient:
     def __init__(self, api_key: str, config: LLMConfig | None = None) -> None:
-        self._config = config or LLMConfig(model=os.getenv("AIKER_MODEL", "qwen/qwen3-235b-a22b"))
+        self._config = config or LLMConfig(model=os.getenv("AIKER_MODEL", "qwen/qwen3.6-plus"))
         self._client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
 
     @classmethod
